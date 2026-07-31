@@ -1,0 +1,5 @@
+# System packages installed before pip runs.
+# libgomp1 is the OpenMP runtime LightGBM links against. Without it the deploy
+# fails at `import lightgbm` with a libgomp.so.1 error that names no cause.
+# Required on Hugging Face Spaces, Streamlit Community Cloud, and most Linux hosts.
+libgomp1
