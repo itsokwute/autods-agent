@@ -114,9 +114,16 @@ def _secret(name: str, default: str = "") -> str:
 
 SECRETS_PATH = Path(__file__).parent / ".streamlit" / "secrets.toml"
 
-# Hugging Face Spaces sets SPACE_ID. Anything hosted behaves differently: no writing
-# secrets to an ephemeral disk, and a run cap when the operator supplies the API key.
-IS_HOSTED = bool(os.getenv("SPACE_ID") or os.getenv("HOSTED"))
+# Hosted deployments behave differently: no writing secrets to an ephemeral disk,
+# and a run cap when the operator supplies the API key.
+#   HOSTED        explicit switch -- set it as a secret on any host
+#   SPACE_ID      Hugging Face Spaces
+#   /mount/src    Streamlit Community Cloud mounts the repo here
+IS_HOSTED = bool(
+    _secret("HOSTED")
+    or os.getenv("SPACE_ID")
+    or Path("/mount/src").exists()
+)
 
 
 def save_key(key: str) -> tuple[bool, str]:
@@ -359,14 +366,16 @@ if IS_HOSTED:
             "**Live demo.** Paste your own Anthropic API key in the sidebar to run an analysis — "
             "get one free at [console.anthropic.com](https://console.anthropic.com). "
             "Your key is used for this session only and is never stored. "
-            "Uploaded files are processed in this container and are wiped when it restarts."
+            "Uploaded files are processed in memory and wiped when the app restarts. "
+            "On free hosting, keep demo files under about 50 MB."
         )
     elif using_server_key:
         remaining = max(MAX_RUNS - st.session_state.get("runs_used", 0), 0)
         st.info(
             f"**Live demo.** {remaining} of {MAX_RUNS} free runs left this session. "
             "Paste your own Anthropic API key in the sidebar for unlimited runs. "
-            "Uploaded files are wiped when this container restarts."
+            "Uploaded files are wiped when the app restarts. "
+            "On free hosting, keep demo files under about 50 MB."
         )
 
 
