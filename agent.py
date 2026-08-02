@@ -382,6 +382,14 @@ def _trim_traceback(tb: str, limit: int = 4_000) -> str:
 # --------------------------------------------------------------------------- #
 # Anthropic client wrapper
 # --------------------------------------------------------------------------- #
+class FatalAPIError(RuntimeError):
+    """A failure no retry can fix: bad key, no credit, no model access.
+
+    Raised so the pipeline stops immediately rather than repeating the same
+    doomed call once per stage.
+    """
+
+
 class ClaudeClient:
     """Thin wrapper: retries, JSON coercion, and code-fence stripping."""
 
@@ -441,6 +449,11 @@ class ClaudeClient:
                 if attempt >= retries:
                     break
                 time.sleep(min(2 ** (attempt - 1) * 1.5, 20))
+        message = str(last_error).lower()
+        if any(sign in message for sign in ("authentication_error", "invalid x-api-key",
+                                            "api key is invalid", "credit balance",
+                                            "permission_error", "401")):
+            raise FatalAPIError(f"{last_error}")
         raise RuntimeError(f"Anthropic API call failed after {retries} attempts: {last_error}")
 
     def complete_json(self, system: str, messages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
@@ -850,6 +863,8 @@ class AutoDSAgent:
                 framing = self.client.complete_json(  # type: ignore[union-attr]
                     BUSINESS_FRAMING_SYSTEM, [{"role": "user", "content": prompt}]
                 )
+            except FatalAPIError:
+                raise
             except Exception as exc:
                 yield AgentEvent("error", "framing", f"Could not frame '{key}': {exc}")
                 continue
@@ -1139,6 +1154,11 @@ class AutoDSAgent:
             yield from self._stage_prepare()
             yield from self._stage_model()
             yield from self._stage_report()
+        except FatalAPIError as exc:
+            yield AgentEvent(
+                "error", "pipeline",
+                f"{exc}\n\nThe run stopped here — retrying would fail the same way.",
+            )
         except Exception as exc:  # pragma: no cover - top-level safety net
             yield AgentEvent("error", "pipeline", f"{type(exc).__name__}: {exc}")
             LOGGER.exception("Pipeline aborted")
@@ -1184,6 +1204,7 @@ __all__ = [
     "ClaudeClient",
     "DEFAULT_MODEL",
     "ExecResult",
+    "FatalAPIError",
     "PythonREPL",
     "SUPPORTED_MODELS",
     "TranscriptCell",

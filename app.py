@@ -126,13 +126,53 @@ IS_HOSTED = bool(
 )
 
 
+def clean_key(raw: str) -> str:
+    """Strip what copy-paste adds: whitespace, quotes, newlines, zero-width chars.
+
+    Pasting from a console, an email, or a secrets box routinely carries a trailing
+    newline or a pair of quotes. The API rejects those with a bare 401 that names
+    no cause, so remove them before the key is ever used.
+    """
+    if not raw:
+        return ""
+    cleaned = str(raw).strip()
+    for ch in ("\u200b", "\u200c", "\u200d", "\ufeff", "\xa0", "\n", "\r", "\t", " "):
+        cleaned = cleaned.replace(ch, "")
+    if len(cleaned) >= 2 and cleaned[0] in "\"'\u201c\u2018" and cleaned[-1] in "\"'\u201d\u2019":
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
+def inspect_key(raw: str) -> list:
+    """(passed, message) checks on the key's shape. Never reveals the key."""
+    cleaned = clean_key(raw)
+    checks = []
+    if raw and raw != cleaned:
+        removed = len(raw) - len(cleaned)
+        checks.append((True, f"Removed {removed} stray character(s) from your paste (spaces or quotes)."))
+    checks.append((bool(cleaned), "Key is present." if cleaned else "No key entered."))
+    if not cleaned:
+        return checks
+    checks.append((cleaned.startswith("sk-ant-"),
+                   "Starts with sk-ant-." if cleaned.startswith("sk-ant-")
+                   else f"Does NOT start with sk-ant- (starts with '{cleaned[:7]}'). This is not an Anthropic API key."))
+    long_enough = len(cleaned) >= 90
+    checks.append((long_enough,
+                   f"Length {len(cleaned)} characters — looks complete."
+                   if long_enough else
+                   f"Length {len(cleaned)} — too short. A full key is about 100+ characters, so the copy was cut off."))
+    checks.append((cleaned.isascii(), "No unusual characters." if cleaned.isascii()
+                   else "Contains non-standard characters — retype it rather than pasting."))
+    return checks
+
+
 def save_key(key: str) -> tuple[bool, str]:
     """Write the key to .streamlit/secrets.toml so it is never typed again."""
     try:
         SECRETS_PATH.parent.mkdir(parents=True, exist_ok=True)
         existing = SECRETS_PATH.read_text() if SECRETS_PATH.exists() else ""
         lines = [ln for ln in existing.splitlines() if not ln.strip().startswith("ANTHROPIC_API_KEY")]
-        lines.insert(0, f'ANTHROPIC_API_KEY = "{key.strip()}"')
+        lines.insert(0, f'ANTHROPIC_API_KEY = "{clean_key(key)}"')
         SECRETS_PATH.write_text("\n".join(lines).strip() + "\n")
         return True, f"Saved. It will load automatically from {SECRETS_PATH.name} from now on."
     except Exception as exc:
@@ -201,6 +241,9 @@ def explain_error(message: str) -> tuple[str, str]:
 
 def test_key(key: str, model: str) -> tuple[bool, str]:
     """One tiny API call that proves the key, the credit, and the model all work."""
+    key = clean_key(key)
+    if not key:
+        return False, "No key entered."
     try:
         import anthropic
 
@@ -266,6 +309,7 @@ with st.sidebar:
         type="password",
         help="Loads automatically once saved. Click 'Save key' below to store it on this computer.",
     )
+    api_key = clean_key(api_key)
 
     if env_key and api_key == env_key:
         st.caption("✓ Key loaded automatically — you don't need to type it.")
@@ -302,12 +346,8 @@ with st.sidebar:
         else:
             for _, label, fix in failed:
                 st.error(f"**{label}** — {fix}")
-        if api_key.startswith("sk-ant-"):
-            st.success("API key format looks correct.")
-        elif api_key:
-            st.warning("That key doesn't start with `sk-ant-`. Check you copied the whole thing.")
-        else:
-            st.warning("No API key yet. Paste one above, then click Save key.")
+        for passed, message in inspect_key(st.session_state.get("api_key_raw", api_key)):
+            (st.success if passed else st.error)(message)
         if SECRETS_PATH.exists():
             st.caption(f"Key file: {SECRETS_PATH}")
         st.caption(f"Working folder: {Path(__file__).parent}")
@@ -647,16 +687,33 @@ with tab_run:
         elif not api_key:
             st.caption("An Anthropic API key is required in the sidebar.")
 
-    if launch and IS_HOSTED and using_server_key and st.session_state.get("runs_used", 0) >= MAX_RUNS:
-        st.error(
-            f"Demo limit reached — {MAX_RUNS} runs per session on the shared key.\n\n"
-            "Paste your own Anthropic API key in the sidebar to keep going. "
-            "Get one at console.anthropic.com."
-        )
-    elif launch:
-        if not api_key:
+    # One gate, evaluated in order: demo cap -> key present -> key actually works.
+    # The key is verified with a 1-token call BEFORE the run, so an invalid key
+    # fails in two seconds with a clear message instead of after every stage.
+    cleared_to_run = False
+    if launch:
+        if IS_HOSTED and using_server_key and st.session_state.get("runs_used", 0) >= MAX_RUNS:
+            st.error(
+                f"Demo limit reached — {MAX_RUNS} runs per session on the shared key.\n\n"
+                "Paste your own Anthropic API key in the sidebar to keep going. "
+                "Get one at console.anthropic.com."
+            )
+        elif not api_key:
             st.error("Add your Anthropic API key in the sidebar.")
         else:
+            with st.spinner("Checking your API key..."):
+                key_ok, key_message = test_key(api_key, model)
+            if key_ok:
+                cleared_to_run = True
+            else:
+                st.error(f"**The run did not start — no credit was used.**\n\n{key_message}")
+                st.info(
+                    "Open **🩺 Diagnostics** in the sidebar. It inspects your key and names "
+                    "exactly what is wrong with it — wrong prefix, cut-off paste, or stray characters."
+                )
+
+    if cleared_to_run:
+        if True:
             config = AgentConfig(
                 api_key=api_key,
                 model=model,
