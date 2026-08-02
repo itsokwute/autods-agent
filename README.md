@@ -1,6 +1,6 @@
 # AutoDS-Agent
 
-**[▶ Try the live demo](https://YOUR-APP-NAME.streamlit.app)** — replace this with your real URL after deploying (see `STAGE-4-REVISED.md`).
+**[▶ Try the live demo]([https://YOUR-APP-NAME.streamlit.app](https://autods-agent-q8qrh8stxnntkcwxgu9hdw.streamlit.app/))** — replace this with your real URL after deploying (see `STAGE-4-REVISED.md`).
 
 **An autonomous data science engineer.** Drop in a CSV, a ZIP of spreadsheets, a PDF full of
 tables, or a URL — AutoDS-Agent profiles it, defines the ML problem, writes and *executes*
